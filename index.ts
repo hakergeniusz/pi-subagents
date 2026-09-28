@@ -455,25 +455,31 @@ function runAgent(
 /**
  * Children are launched with `--no-extensions` so they inherit no parent
  * extension set. That isolation is the point, but it also means a provider
- * which only works with a local patch extension fails with an opaque 403 —
- * opencode's free tier is the common case, since every opencode free model
- * except `space-bunny-free` is rejected outside the OpenCode client.
+ * which only answers under OpenCode's own client contract fails with an opaque
+ * 403 -- opencode's free tier is the common case.
  *
- * Turn that into an actionable message instead of passing the raw provider
- * text up, otherwise the model just sees a 403 and retries.
+ * A header patch does not clear that gate on its own (measured: no difference
+ * for muse-spark / mimo / longcat / nemotron), so lead with the fix that works
+ * -- a model that answers -- and mention the patch as the optional route.
  */
 function explainChildFailure(stderr: string): string | undefined {
 	if (!/FreeTierError|can only be used from within/i.test(stderr)) return undefined;
 	const patch = path.join(os.homedir(), ".pi", "agent", "extensions", "opencode-free-tier", "index.ts");
 	return [
-		"The child pi runs with --no-extensions, so provider patches are not loaded.",
-		"Add the patch to this agent's frontmatter:",
+		"The child pi runs with --no-extensions and sends neither OpenCode's CLI identity",
+		"headers nor its official client tool declarations, which the free tier requires.",
+		"",
+		"Reliable fix: point this agent at a model that answers under isolation --",
+		"opencode/space-bunny-free, openrouter/poolside/laguna-xs-2.1:free, or any model",
+		"you hold a key for. No patch required.",
+		"",
+		"If you have a provider patch you can pass it to the child instead:",
 		"",
 		"  extensions:",
 		`    - ${patch}`,
 		"",
-		"Only needed for opencode free-tier models other than space-bunny-free,",
-		"which answers without the patch.",
+		"Note: measured against the opencode Zen free models, a header patch alone did not",
+		"clear the gate. See the README section 'Provider patches and the isolation trade-off'.",
 	].join("\n");
 }
 

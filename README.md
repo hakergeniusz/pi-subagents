@@ -78,25 +78,55 @@ pi -p --mode json --no-session
 ### Provider patches and the isolation trade-off
 
 Because children get `--no-extensions`, they also lose any extension that patches the
-provider itself. The common case is opencode's free tier: every `opencode/*` free model
-except `space-bunny-free` is rejected outside the OpenCode client with
+provider itself. The common case is opencode's free tier, which refuses pi's requests:
 
 ```
 403: {"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}
 ```
 
-`opencode/space-bunny-free` answers without the patch, which is why the shipped agents
-work out of the box. If you switch an agent to another opencode free model, either give
-the child the patch:
+OpenCode Zen gates its free tier on the official client's contract: CLI identity headers
+plus the official client tool declarations. pi sends neither, so Zen free models reject
+it. OmniRoute hits the same wall from the other side — see
+[diegosouzapw/OmniRoute#14156](https://github.com/diegosouzapw/OmniRoute/pull/14156) for
+the tool-contract half of the check and
+[#13937](https://github.com/diegosouzapw/OmniRoute/pull/13937) for the header half.
+
+Measured, each model run as a child with and without a header-patch extension loaded:
+
+| model | no patch | with patch |
+|---|---|---|
+| `opencode/space-bunny-free` | ok | ok |
+| `opencode/muse-spark-1.3-contributor-free` | 403 | 403 |
+| `opencode/mimo-v2.6-flash-free` | 403 | 403 |
+| `opencode/longcat-2.5-preview-free` | 403 | 403 |
+| `opencode/nemotron-3-ultra-free` | 403 | 403 |
+
+A header patch alone does not clear the gate, and widening the child's `--tools` to every
+builtin does not either — the check is on the client contract, not on the tool list.
+
+**So the reliable fix is a model that answers.** Use `opencode/space-bunny-free`,
+`openrouter/poolside/laguna-xs-2.1:free`, or anything you hold a key for. That is why
+the shipped agents work out of the box, and why changing one to another opencode free
+model is the usual way to hit this.
+
+If you have no provider patch and want to try building one, just ask pi to create it:
+
+> Write a pi extension that intercepts outgoing requests to the `opencode` provider and
+> applies the free-tier identity contract observed in real OpenCode CLI traffic —
+> `Authorization: Bearer public`, the official CLI user agent, `x-opencode-client: cli`
+> and a canonical `ses_`-prefixed session id, and no `x-opencode-request` /
+> `x-opencode-project` headers.
+
+Then hand it to the child, which loads it *after* `--no-extensions`:
 
 ```yaml
 extensions:
   - ~/.pi/agent/extensions/opencode-free-tier/index.ts
 ```
 
-or pick a model that works without one (`opencode/space-bunny-free`,
-`openrouter/poolside/laguna-xs-2.1:free`, or anything you hold a key for). A child that
-fails this way now says so in the tool result instead of returning a bare 403.
+Whether that clears the gate is provider-side and may change; the table above is what
+was measured. A child that fails this way now reports the provider error together with
+this fix in the tool result, instead of returning an empty success.
 
 ## Environment variables
 
