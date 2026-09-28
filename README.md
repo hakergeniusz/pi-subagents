@@ -78,7 +78,8 @@ pi -p --mode json --no-session
 ### Provider patches and the isolation trade-off
 
 Because children get `--no-extensions`, they also lose any extension that patches the
-provider itself. The common case is opencode's free tier, which refuses pi's requests:
+provider itself. On top of that, the free tier checks the tool list the request carries.
+Together those two are what produce the common failure:
 
 ```
 403: {"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}
@@ -89,25 +90,53 @@ plus the official client tool declarations. pi sends neither, so Zen free models
 it. OmniRoute hits the same wall from the other side — see
 [diegosouzapw/OmniRoute#14156](https://github.com/diegosouzapw/OmniRoute/pull/14156) for
 the tool-contract half of the check and
-[#13937](https://github.com/diegosouzapw/OmniRoute/pull/13937) for the header half.
+[#13937](https://github.com/diegosouzapw/OmniRoute/pull/13937) for the header half. This
+tool now hands the child the parent's extension set for exactly that reason, minus itself
+(`PI_SUBAGENT_INHERIT_EXTENSIONS=0` opts out).
 
-Measured, each model run as a child with and without a header-patch extension loaded:
+Measured, `muse-spark-1.3-contributor-free`, three repetitions per cell:
 
-| model | no patch | with patch |
+| header patch | `--tools` sent | result |
 |---|---|---|
-| `opencode/space-bunny-free` | ok | ok |
-| `opencode/muse-spark-1.3-contributor-free` | 403 | 403 |
-| `opencode/mimo-v2.6-flash-free` | 403 | 403 |
-| `opencode/longcat-2.5-preview-free` | 403 | 403 |
-| `opencode/nemotron-3-ultra-free` | 403 | 403 |
+| no | full builtin set | 403 |
+| yes | full builtin set | **ok** |
+| no | narrow (scout's list) | 403 |
+| yes | narrow (scout's list) | 403 |
 
-A header patch alone does not clear the gate, and widening the child's `--tools` to every
-builtin does not either — the check is on the client contract, not on the tool list.
+**Both are required.** The patch alone is not enough, and the tool list alone is not
+enough. Note the last row: a narrow allowlist fails *even with* the patch, because the
+free tier wants OpenCode's official client tool names in the request. pi has no `glob`,
+so the set that satisfies it is `read, grep, edit, write, bash` — `find` and `ls` are
+pi-specific and do not count.
 
-**So the reliable fix is a model that answers.** Use `opencode/space-bunny-free`,
-`openrouter/poolside/laguna-xs-2.1:free`, or anything you hold a key for. That is why
-the shipped agents work out of the box, and why changing one to another opencode free
-model is the usual way to hit this.
+The model itself barely matters. With the patch loaded:
+
+| model | narrow tools | full tools |
+|---|---|---|
+| `opencode/space-bunny-free` | **ok** | ok |
+| `opencode/muse-spark-1.3-contributor-free` | 403 | ok |
+| `opencode/muse-spark-1.2-contributor-free` | 403 | ok |
+| `opencode/nemotron-3-ultra-free` | 403 | ok |
+| `opencode/nemotron-3.5-lightning-free` | 403 | ok |
+| `opencode/longcat-2.5-preview-free` | 403 | ok |
+| `opencode/mimo-v2.5-free` | 403 | ok |
+| `opencode/mimo-v2.6-flash-free` | 403 | ok |
+| `opencode/ling-3.0-flash-fin-free` | 403 | endpoint unavailable |
+
+`space-bunny-free` is the only model that answers with a narrow allowlist, which is why
+it is what the shipped agents use. `ling-3.0-flash-fin-free` is broken independently of
+this — its endpoint 404s even with everything correct.
+
+What this means for the shipped agents, whose `tools:` lists differ:
+
+| agent | tools | can use a Zen free model? |
+|---|---|---|
+| `worker` | read, grep, find, ls, bash, edit, write | yes — has all five |
+| `scout` | read, grep, find, ls | no — narrow; keep it on `space-bunny-free` |
+| `researcher` | read, grep, find, ls, bash, web_search | no — missing edit + write |
+
+Widening `scout` to satisfy the gate would hand a read-only recon agent `edit`, `write`
+and `bash`, so the allowlist is left honest and the model is the thing that gives.
 
 If you have no provider patch and want to try building one, just ask pi to create it:
 
