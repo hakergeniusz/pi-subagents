@@ -75,6 +75,29 @@ pi -p --mode json --no-session
 * `ctx.signal` abort → `SIGTERM`, escalating to `SIGKILL` after 3s.
 * Output is truncated to 20 000 chars per agent, head+tail, with an explicit marker.
 
+### Provider patches and the isolation trade-off
+
+Because children get `--no-extensions`, they also lose any extension that patches the
+provider itself. The common case is opencode's free tier: every `opencode/*` free model
+except `space-bunny-free` is rejected outside the OpenCode client with
+
+```
+403: {"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}
+```
+
+`opencode/space-bunny-free` answers without the patch, which is why the shipped agents
+work out of the box. If you switch an agent to another opencode free model, either give
+the child the patch:
+
+```yaml
+extensions:
+  - ~/.pi/agent/extensions/opencode-free-tier/index.ts
+```
+
+or pick a model that works without one (`opencode/space-bunny-free`,
+`openrouter/poolside/laguna-xs-2.1:free`, or anything you hold a key for). A child that
+fails this way now says so in the tool result instead of returning a bare 403.
+
 ## Environment variables
 
 | Variable | Default | Meaning |

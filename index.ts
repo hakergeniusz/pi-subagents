@@ -32,6 +32,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -425,9 +426,41 @@ function runAgent(
 		child.on("close", (code, sig) => {
 			if (code === 0 || (code === null && sig === null)) finish();
 			else if (sig) finish(`subagent ${agent.name} killed (${sig})`);
-			else finish(`subagent ${agent.name} exited with code ${code}: ${stderr.trim().slice(-500)}`);
+			else {
+				const detail = stderr.trim().slice(-500);
+				const hint = explainChildFailure(stderr);
+				finish(
+					`subagent ${agent.name} exited with code ${code}: ${detail}` +
+						(hint ? `\n\n${hint}` : ""),
+				);
+			}
 		});
 	});
+}
+
+/**
+ * Children are launched with `--no-extensions` so they inherit no parent
+ * extension set. That isolation is the point, but it also means a provider
+ * which only works with a local patch extension fails with an opaque 403 —
+ * opencode's free tier is the common case, since every opencode free model
+ * except `space-bunny-free` is rejected outside the OpenCode client.
+ *
+ * Turn that into an actionable message instead of passing the raw provider
+ * text up, otherwise the model just sees a 403 and retries.
+ */
+function explainChildFailure(stderr: string): string | undefined {
+	if (!/FreeTierError|can only be used from within/i.test(stderr)) return undefined;
+	const patch = path.join(os.homedir(), ".pi", "agent", "extensions", "opencode-free-tier", "index.ts");
+	return [
+		"The child pi runs with --no-extensions, so provider patches are not loaded.",
+		"Add the patch to this agent's frontmatter:",
+		"",
+		"  extensions:",
+		`    - ${patch}`,
+		"",
+		"Only needed for opencode free-tier models other than space-bunny-free,",
+		"which answers without the patch.",
+	].join("\n");
 }
 
 // ---------------------------------------------------------------------------
