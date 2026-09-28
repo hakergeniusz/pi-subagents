@@ -98,6 +98,123 @@ interface TaskProgress {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const AGENTS_DIR = path.join(HERE, "agents");
+const SELF_ENTRY = path.join(HERE, "index.ts");
+const SELF_ENTRY_JS = path.join(HERE, "index.js");
+
+/** pi's agent directory: the parent passes it down so discovery matches. */
+const AGENT_DIR = path.resolve(process.env.PI_SUBAGENT_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"));
+
+/**
+ * Extensions the child must never load.
+ *
+ * This tool is first: loading it again in the child would re-register a second
+ * `subagent` tool whose name collides with the one the parent already owns, and
+ * pi refuses to start on a tool-name conflict. `PI_SUBAGENT_MAX_DEPTH` already
+ * bounds recursion, but excluding the file is what keeps the child's registry
+ * honest, so it is dropped from every inherited set.
+ */
+const SELF_EXCLUSIONS = new Set<string>([SELF_ENTRY, SELF_ENTRY_JS, HERE]);
+
+/** Frontmatter `extensions:` entries, normalised to absolute paths. */
+function resolveExtensionList(list: string[] | undefined): string[] {
+	return (list ?? [])
+		.map((ext) => (path.isAbsolute(ext) ? ext : path.resolve(HERE, ext)))
+		.filter((ext) => !SELF_EXCLUSIONS.has(ext));
+}
+
+/**
+ * Mirror the parent's extension set into the child, minus this extension.
+ *
+ * Rationale: a child that loads nothing also loses provider patches. The
+ * opencode free tier, for example, is only reachable when the header patch is
+ * loaded *and* the request carries a full tool list -- measured 403 in every
+ * other combination. Isolating the child is right for tools, but it silently
+ * breaks providers, so the child inherits everything except this file.
+ */
+function discoverParentExtensions(): string[] {
+	const found = new Set<string>();
+	const userDir = path.join(AGENT_DIR, "extensions");
+
+	// 1. packages: the `pi.extensions` manifest of every installed package,
+	//    which is where git/npm-installed extensions actually live.
+	for (const dir of [userDir, path.join(AGENT_DIR, "git"), path.join(AGENT_DIR, "npm", "node_modules")]) {
+		collectExtensionEntries(dir, found, 3);
+	}
+
+	// 2. explicit `extensions:` entries in settings.json (local overrides)
+	try {
+		const settings = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, "settings.json"), "utf8")) as {
+			extensions?: string[];
+		};
+		for (const entry of settings.extensions ?? []) {
+			const abs = path.isAbsolute(entry) ? entry : path.resolve(userDir, entry);
+			if (fs.existsSync(abs) && !SELF_EXCLUSIONS.has(abs)) found.add(abs);
+		}
+	} catch {
+		// no settings, or unreadable - the directory scan above still applies
+	}
+
+	return [...found];
+}
+
+/** Resolve one extensions/ entry to the file pi would actually load. */
+function resolveExtensionEntry(entry: string): string | undefined {
+	try {
+		const stat = fs.statSync(entry);
+		if (stat.isFile()) return /\.tsx?$|\.jsx?$|\.mjs$|\.cjs$/.test(entry) ? entry : undefined;
+		if (!stat.isDirectory()) return undefined;
+		for (const candidate of ["index.ts", "index.js", "index.mjs", "index.cjs"]) {
+			const file = path.join(entry, candidate);
+			if (fs.existsSync(file)) return file;
+		}
+		const manifest = path.join(entry, "package.json");
+		if (fs.existsSync(manifest)) {
+			const parsed = JSON.parse(fs.readFileSync(manifest, "utf8")) as {
+				pi?: { extensions?: string[] };
+				main?: string;
+			};
+			for (const declared of parsed.pi?.extensions ?? []) {
+				const file = path.resolve(entry, declared.replace(/^\.\//, ""));
+				if (fs.existsSync(file)) return file;
+			}
+			if (parsed.main) {
+				const file = path.resolve(entry, parsed.main);
+				if (fs.existsSync(file)) return file;
+			}
+		}
+	} catch {
+		// unreadable entry - skip it rather than fail the whole spawn
+	}
+	return undefined;
+}
+
+/** Walk `dir` up to `depth` levels, resolving every loadable extension entry. */
+function collectExtensionEntries(dir: string, into: Set<string>, depth: number): void {
+	if (depth < 0) return;
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (entry.name === "node_modules" && dir !== path.join(AGENT_DIR, "npm", "node_modules")) continue;
+		const full = path.join(dir, entry.name);
+		if (SELF_EXCLUSIONS.has(full)) continue;
+		if (entry.isDirectory()) {
+			// A package dir: prefer its manifest/index over descending into it.
+			const resolved = resolveExtensionEntry(full);
+			if (resolved) {
+				if (!SELF_EXCLUSIONS.has(resolved)) into.add(resolved);
+				continue;
+			}
+			collectExtensionEntries(full, into, depth - 1);
+			continue;
+		}
+		const resolved = resolveExtensionEntry(full);
+		if (resolved && !SELF_EXCLUSIONS.has(resolved)) into.add(resolved);
+	}
+}
 
 const MAX_DEPTH = Number.parseInt(process.env.PI_SUBAGENT_MAX_DEPTH ?? "1", 10) || 1;
 const MAX_PARALLEL = Math.min(Math.max(Number.parseInt(process.env.PI_SUBAGENT_MAX_PARALLEL ?? "3", 10) || 3, 1), 8);
@@ -240,15 +357,25 @@ function buildChildArgs(
 		"--mode",
 		"json",
 		"--no-session",
-		// isolation: no extension discovery at all, only what the agent opts into
+		// discovery stays off so the child cannot pick up anything the parent
+		// did not hand it, but the parent's set is re-supplied explicitly below
 		"--no-extensions",
 		"--no-prompt-templates",
 		"--no-themes",
 	];
-	for (const ext of agent.extensions ?? []) {
-		const resolved = path.isAbsolute(ext) ? ext : path.resolve(HERE, ext);
-		args.push("--extension", resolved);
+
+	// Inherit the parent's extensions (minus this file) unless opted out.
+	// Provider patches live here, and a child without them gets 403s from any
+	// provider that gates on client identity.
+	const inherit = process.env.PI_SUBAGENT_INHERIT_EXTENSIONS !== "0";
+	const inherited = inherit ? discoverParentExtensions() : [];
+	const extensionArgs: string[] = [];
+	for (const ext of [...inherited, ...resolveExtensionList(agent.extensions)]) {
+		if (SELF_EXCLUSIONS.has(ext)) continue;
+		extensionArgs.push("--extension", ext);
 	}
+	args.push(...extensionArgs);
+
 	if (agent.systemPrompt) args.push("--append-system-prompt", agent.systemPrompt);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 	if (agent.thinking) args.push("--thinking", agent.thinking);
