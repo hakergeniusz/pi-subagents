@@ -4,6 +4,7 @@ description: Reads documentation, issues, and long files, then answers one quest
 model: opencode/space-bunny-free
 thinking: medium
 tools: read, grep, find, ls, bash, web_search
+locked_tools: edit, write
 ---
 You are a research agent. You gather evidence and answer exactly one question.
 

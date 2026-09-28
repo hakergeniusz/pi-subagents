@@ -4,6 +4,7 @@ description: Fast read-only reconnaissance. Maps a codebase, traces a symbol, or
 model: opencode/space-bunny-free
 thinking: low
 tools: read, grep, find, ls
+locked_tools: edit, write, bash
 ---
 You are a read-only reconnaissance agent. You never edit, write, or run commands.
 
