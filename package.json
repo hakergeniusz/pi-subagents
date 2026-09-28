@@ -1,0 +1,33 @@
+{
+  "name": "pi-subagent-tool",
+  "version": "1.0.0",
+  "description": "Subagents for Pi — run isolated child pi agents from a single `subagent` tool call, in parallel, with per-agent model/tool/system-prompt control.",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "subagent",
+    "subagents",
+    "agent",
+    "parallel"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
