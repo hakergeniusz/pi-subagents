@@ -337,6 +337,7 @@ function runAgent(
 		let killTimer: ReturnType<typeof setTimeout> | undefined;
 		let lastTick = 0;
 		let stdoutBuf = "";
+		let childError = "";
 
 		const finish = (error?: string) => {
 			if (settled) return;
@@ -403,6 +404,14 @@ function runAgent(
 					const message = (event as { message?: Record<string, unknown> }).message;
 					if (!message || typeof message !== "object") continue;
 					const role = message.role;
+					// A provider-level failure (401/403/429/5xx) arrives as a
+					// message_end with stopReason "error" and an empty content
+					// array. The child still exits 0 and prints nothing to stderr,
+					// so without this the tool would report a successful subagent
+					// that returned no output and the model would have no idea why.
+					const providerError =
+						typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+					if (providerError) childError = providerError;
 					if (role === "assistant") {
 						const text = extractText(message.content).trim();
 						if (text) answer = text;
@@ -424,7 +433,12 @@ function runAgent(
 
 		child.on("error", (err) => finish(`subagent process error: ${err.message}`));
 		child.on("close", (code, sig) => {
-			if (code === 0 || (code === null && sig === null)) finish();
+			if (childError) {
+				const hint = explainChildFailure(childError);
+				finish(
+					`subagent ${agent.name} failed: ${childError}` + (hint ? `\n\n${hint}` : ""),
+				);
+			} else if (code === 0 || (code === null && sig === null)) finish();
 			else if (sig) finish(`subagent ${agent.name} killed (${sig})`);
 			else {
 				const detail = stderr.trim().slice(-500);
