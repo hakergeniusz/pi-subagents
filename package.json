@@ -1,7 +1,7 @@
 {
   "name": "pi-subagent-tool",
-  "version": "1.0.0",
-  "description": "Subagents for Pi — run isolated child pi agents from a single `subagent` tool call, in parallel, with per-agent model/tool/system-prompt control.",
+  "version": "1.0.1",
+  "description": "Subagents for Pi \u2014 run isolated child pi agents from a single `subagent` tool call, in parallel, with per-agent model/tool/system-prompt control.",
   "keywords": [
     "pi",
     "pi-package",

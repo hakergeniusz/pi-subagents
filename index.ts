@@ -736,6 +736,9 @@ export default function subagentTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
+		// Deferred: not declared in every request (307 tok + prompt guidelines);
+		// tool_search finds and activates it when delegation is actually needed.
+		exposure: "deferred",
 		description: [
 			"Delegate work to an isolated subagent (a separate pi process with its own context).",
 			"Use sparingly: only when the user explicitly asks for delegation, or when the task is big and can safely be spread across many agents at once.",
