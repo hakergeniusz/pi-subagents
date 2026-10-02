@@ -3,9 +3,11 @@
  *
  * How it works
  * ------------
- * Each requested agent runs in its own `pi -p --mode json` child process with
- * `--no-extensions`, so a subagent can never recursively spawn the parent tool
- * set by accident. Agent behaviour comes from `agents/<name>.md`:
+ * Each requested agent runs in its own `pi -p --mode json` child process. The
+ * child inherits the parent's extension set (re-supplied explicitly under
+ * `--no-extensions`, minus this extension), so provider patches ride along
+ * while the subagent tool itself does not - a child cannot spawn grandchildren.
+ * Agent behaviour comes from `agents/<name>.md`:
  *
  *   ---
  *   name: scout
@@ -149,12 +151,23 @@ function discoverParentExtensions(): string[] {
 		collectExtensionEntries(dir, found, 3);
 	}
 
-	// 2. explicit `extensions:` entries in settings.json (local overrides)
+	// 2. explicit `extensions:` entries in settings.json: plain paths are
+	//    additive; `-path` entries are disables (how ext-guard records them)
+	//    and must override the directory scan above, or a guard-disabled
+	//    extension would load in children anyway.
 	try {
 		const settings = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, "settings.json"), "utf8")) as {
 			extensions?: string[];
 		};
 		for (const entry of settings.extensions ?? []) {
+			if (entry.startsWith("-")) {
+				const raw = entry.slice(1);
+				const abs = path.isAbsolute(raw) ? raw : path.resolve(userDir, raw);
+				found.delete(abs);
+				const resolved = resolveExtensionEntry(abs);
+				if (resolved) found.delete(resolved);
+				continue;
+			}
 			const abs = path.isAbsolute(entry) ? entry : path.resolve(userDir, entry);
 			if (fs.existsSync(abs) && !SELF_EXCLUSIONS.has(abs)) found.add(abs);
 		}
@@ -657,33 +670,24 @@ function runAgent(
 }
 
 /**
- * Children are launched with `--no-extensions` so they inherit no parent
- * extension set. That isolation is the point, but it also means a provider
- * which only answers under OpenCode's own client contract fails with an opaque
- * 403 -- opencode's free tier is the common case.
- *
- * A header patch does not clear that gate on its own (measured: no difference
- * for muse-spark / mimo / longcat / nemotron), so lead with the fix that works
- * -- a model that answers -- and mention the patch as the optional route.
+ * Children inherit the parent's extension set (minus this file), so the
+ * OpenCode free-tier patch - CLI identity headers plus the console key from
+ * the environment - rides along automatically, and the tool contract is
+ * satisfied via locked_tools. A FreeTierError in a child therefore usually
+ * means one of those two halves is missing for this agent.
  */
 function explainChildFailure(stderr: string): string | undefined {
 	if (!/FreeTierError|can only be used from within/i.test(stderr)) return undefined;
-	const patch = path.join(os.homedir(), ".pi", "agent", "extensions", "opencode-free-tier", "index.ts");
 	return [
-		"The child pi runs with --no-extensions and sends neither OpenCode's CLI identity",
-		"headers nor its official client tool declarations, which the free tier requires.",
+		"The child inherits the parent's free-tier patch (CLI identity headers plus the",
+		"console key from the environment), and its --tools list must carry OpenCode's",
+		"client contract: read, grep, edit, write, bash. Check this agent's frontmatter:",
 		"",
-		"Reliable fix: point this agent at a model that answers under isolation --",
-		"opencode/space-bunny-free, openrouter/poolside/laguna-xs-2.1:free, or any model",
-		"you hold a key for. No patch required.",
+		"  tools + locked_tools must together cover all five (locked_tools are advertised",
+		"  only to pass the gate and refused at call time, so read-only agents stay honest).",
 		"",
-		"If you have a provider patch you can pass it to the child instead:",
-		"",
-		"  extensions:",
-		`    - ${patch}`,
-		"",
-		"Note: measured against the opencode Zen free models, a header patch alone did not",
-		"clear the gate. See the README section 'Provider patches and the isolation trade-off'.",
+		"Or point the agent at a model without the client gate: opencode/space-bunny-free,",
+		"openrouter/poolside/laguna-xs-2.1:free, or any model you hold a key for.",
 	].join("\n");
 }
 

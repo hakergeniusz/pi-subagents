@@ -63,13 +63,17 @@ The body is the subagent's system prompt, appended to pi's default coding prompt
 ```
 pi -p --mode json --no-session
    --no-extensions --no-prompt-templates --no-themes
+   [--extension <parent's extensions, minus this one>]
    [--extension <agent extensions>] [--append-system-prompt <body>]
    [--tools <allowlist>] [--thinking <level>] [--provider p --model m]
    <task>
 ```
 
-* `--no-extensions` is always passed, so a subagent never inherits the parent's
-  extension set (and can never re-enter this tool by accident).
+* `--no-extensions` keeps discovery off, and the parent's extension set is then
+  re-supplied explicitly, minus this extension: provider patches ride along,
+  the subagent tool does not, so a child can never re-enter this tool.
+  `PI_SUBAGENT_INHERIT_EXTENSIONS=0` opts out; extensions disabled in settings
+  (`-path` entries, as ext-guard writes them) are not inherited.
 * Child `usage` is summed into the tool result, so `/tokens` and session totals stay
   correct.
 * `ctx.signal` abort → `SIGTERM`, escalating to `SIGKILL` after 3s.
@@ -138,24 +142,23 @@ What this means for the shipped agents, whose `tools:` lists differ:
 Widening `scout` to satisfy the gate would hand a read-only recon agent `edit`, `write`
 and `bash`, so the allowlist is left honest and the model is the thing that gives.
 
-If you have no provider patch and want to try building one, just ask pi to create it:
+Note on the tables above: they were measured with the public-bearer patch,
+before the extension gained the console-key auth ladder (environment key first,
+OAuth, then anonymous). The key only widens what answers; the tool-contract
+half of the gate is unchanged, so the `--tools` conclusions still hold.
 
-> Write a pi extension that intercepts outgoing requests to the `opencode` provider and
-> applies the free-tier identity contract observed in real OpenCode CLI traffic —
-> `Authorization: Bearer public`, the official CLI user agent, `x-opencode-client: cli`
-> and a canonical `ses_`-prefixed session id, and no `x-opencode-request` /
-> `x-opencode-project` headers.
-
-Then hand it to the child, which loads it *after* `--no-extensions`:
+The patch lives in the parent's extension set, so children inherit it
+automatically — a per-agent `extensions:` entry is only needed for extras:
 
 ```yaml
 extensions:
-  - ~/.pi/agent/extensions/opencode-free-tier/index.ts
+  - ./agents/helpers/my-ext.ts
 ```
 
-Whether that clears the gate is provider-side and may change; the table above is what
-was measured. A child that fails this way now reports the provider error together with
-this fix in the tool result, instead of returning an empty success.
+Whether the free tier clears a given model is provider-side and may change; the
+tables above are what was measured. A child that fails this way reports the
+provider error together with the current fix in the tool result, instead of
+returning an empty success.
 
 ## Environment variables
 
