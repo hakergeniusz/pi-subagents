@@ -472,6 +472,33 @@ function addUsage(target: Usage, delta: Usage | undefined): void {
 	target.cacheRead = (target.cacheRead ?? 0) + (delta.cacheRead ?? 0);
 	target.cacheWrite = (target.cacheWrite ?? 0) + (delta.cacheWrite ?? 0);
 	target.totalTokens = (target.totalTokens ?? 0) + (delta.totalTokens ?? 0);
+	// pi core's footer reads usage.cost.total unguarded when rendering session
+	// stats, so a usage object without a complete cost crashes pi on the next
+	// render (and on every reopen of the session). Child sessions report
+	// provider-shaped usage with cost; zero-fill when a nested child (pre-fix)
+	// reports tokens only.
+	target.cost = {
+		input: (target.cost?.input ?? 0) + (delta.cost?.input ?? 0),
+		output: (target.cost?.output ?? 0) + (delta.cost?.output ?? 0),
+		cacheRead: (target.cost?.cacheRead ?? 0) + (delta.cost?.cacheRead ?? 0),
+		cacheWrite: (target.cost?.cacheWrite ?? 0) + (delta.cost?.cacheWrite ?? 0),
+		total: (target.cost?.total ?? 0) + (delta.cost?.total ?? 0),
+	};
+}
+
+/** Guarantee a usage object carries the complete cost shape pi's footer
+ * expects, so nothing we attach to a tool result can brick a session. */
+function completeCost(usage: Usage): Usage {
+	return {
+		...usage,
+		cost: {
+			input: usage.cost?.input ?? 0,
+			output: usage.cost?.output ?? 0,
+			cacheRead: usage.cost?.cacheRead ?? 0,
+			cacheWrite: usage.cost?.cacheWrite ?? 0,
+			total: usage.cost?.total ?? 0,
+		},
+	};
 }
 
 function runAgent(
@@ -526,7 +553,7 @@ function runAgent(
 			resolve({
 				output: text,
 				error,
-				usage: usage.totalTokens || usage.input || usage.output ? usage : undefined,
+				usage: usage.totalTokens || usage.input || usage.output ? completeCost(usage) : undefined,
 				durationMs: Date.now() - started,
 				toolsUsed,
 			});
@@ -858,7 +885,7 @@ export default function subagentTool(pi: ExtensionAPI): void {
 				return { type: "text" as const, text: `${header}\n${text}${footer}` };
 			});
 
-			return { content, details: { depth, results }, usage: total };
+			return { content, details: { depth, results }, usage: completeCost(total) };
 		},
 	});
 }
